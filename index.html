@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Romania — Cycling Risk Map</title>
+    <link href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" rel="stylesheet" />
+    <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+    <script src="https://unpkg.com/pmtiles@3.2.1/dist/pmtiles.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body, #map { height: 100%; width: 100%; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+
+        /* ── Title / logo (top-left) ── */
+        #brand {
+            position: absolute; top: 12px; left: 12px; z-index: 5;
+            display: flex; align-items: center; gap: 10px;
+            background: linear-gradient(135deg, #1a237e, #283593);
+            color: #fff; padding: 8px 14px 8px 8px; border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,.3);
+        }
+        #brand img { width: 46px; height: 46px; border-radius: 50%; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+        #brand h1 { font-size: 16px; font-weight: 700; line-height: 1.2; }
+        #brand .sub { font-size: 11px; opacity: .8; }
+
+        /* ── Legend (bottom-right) ── */
+        #legend {
+            position: absolute; bottom: 16px; right: 12px; z-index: 5;
+            background: #fff; padding: 11px 13px; border-radius: 8px;
+            box-shadow: 0 2px 12px rgba(0,0,0,.18); font-size: 12px; line-height: 1.5;
+        }
+        #legend h4 { font-size: 13px; margin-bottom: 7px; color: #333; }
+        .lg { display: flex; align-items: center; margin: 3px 0; }
+        .lg i { width: 26px; height: 5px; margin-right: 8px; border-radius: 3px; }
+        #legend .hint { margin-top: 8px; font-size: 11px; color: #888; max-width: 180px; }
+
+        /* ── Footer link (bottom-left) ── */
+        #footer {
+            position: absolute; bottom: 16px; left: 12px; z-index: 5;
+            background: #fff; padding: 7px 12px; border-radius: 8px;
+            box-shadow: 0 2px 12px rgba(0,0,0,.18); font-size: 12px;
+        }
+        #footer a { color: #1a237e; text-decoration: none; font-weight: 600; }
+        #footer a:hover { text-decoration: underline; }
+
+        .maplibregl-popup { max-width: 320px !important; }
+        .maplibregl-popup-content {
+            font-size: 13px; padding: 12px 14px; border-radius: 8px;
+            box-shadow: 0 3px 14px rgba(0,0,0,.25);
+        }
+        .pop-title { font-size: 15px; font-weight: 700; color: #1a237e; margin-bottom: 5px; }
+        .pop-risk { font-size: 26px; font-weight: 800; line-height: 1; }
+        .pop-meta { font-size: 11px; color: #888; margin-top: 7px; border-top: 1px solid #eee; padding-top: 5px; }
+        .pop-inc { color: #c62828; }
+        .pop-dec { color: #2e7d32; }
+
+        #loading {
+            position: absolute; inset: 0; z-index: 10; display: flex;
+            align-items: center; justify-content: center; background: rgba(26,35,126,.92);
+            color: #fff; font-size: 18px; transition: opacity .4s; }
+        #loading .sp { width: 40px; height: 40px; border: 4px solid rgba(255,255,255,.25);
+            border-top-color: #fff; border-radius: 50%; animation: spin .7s linear infinite; margin-right: 14px; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="brand">
+    <img src="logo.png" alt="Defensive Pedal logo">
+    <div><h1>Romania — Cycling Risk</h1><div class="sub">Safety-weighted · zoom in for detail</div></div>
+</div>
+
+<div id="legend">
+    <h4>Cycling risk</h4>
+    <div class="lg"><i style="background:#4CAF50"></i>Very Safe (&lt;30)</div>
+    <div class="lg"><i style="background:#8BC34A"></i>Safe (30–42)</div>
+    <div class="lg"><i style="background:#CDDC39"></i>Low (42–50)</div>
+    <div class="lg"><i style="background:#FFC107"></i>Moderate (50–58)</div>
+    <div class="lg"><i style="background:#FF9800"></i>Elevated (58–65)</div>
+    <div class="lg"><i style="background:#FF5722"></i>High (65–80)</div>
+    <div class="lg"><i style="background:#F44336"></i>Very High (80–100)</div>
+    <div class="lg"><i style="background:#000000"></i>Extreme (&gt;100)</div>
+    <div class="hint">Major roads show when zoomed out; residential & paths appear as you zoom in. Click a road for details.</div>
+</div>
+
+<div id="footer"><a href="https://www.defensivepedal.com/" target="_blank" rel="noopener">Powered by Defensive Pedal →</a></div>
+
+<div id="loading"><div class="sp"></div><span>Loading Romania risk tiles…</span></div>
+
+<script>
+const RISK_COLOR = ["step", ["get", "risk"],
+    "#4CAF50", 30, "#8BC34A", 42, "#CDDC39", 50, "#FFC107",
+    58, "#FF9800", 65, "#FF5722", 80, "#F44336", 100, "#000000"];
+
+function cat(r){return r<30?'Very Safe':r<42?'Safe':r<50?'Low Risk':r<58?'Moderate':r<65?'Elevated':r<80?'High':r<100?'Very High':'Extreme';}
+function col(r){return r<30?'#4CAF50':r<42?'#8BC34A':r<50?'#CDDC39':r<58?'#FFC107':r<65?'#FF9800':r<80?'#FF5722':r<100?'#F44336':'#000000';}
+
+// PMTiles protocol
+const protocol = new pmtiles.Protocol();
+maplibregl.addProtocol("pmtiles", protocol.tile);
+const PMTILES = "pmtiles://" + new URL("romania_risk.pmtiles", location.href).href;
+
+const map = new maplibregl.Map({
+    container: "map",
+    center: [25.0, 45.9],
+    zoom: 6.4,
+    minZoom: 5, maxZoom: 17,
+    style: {
+        version: 8,
+        sources: {
+            basemap: {
+                type: "raster",
+                tiles: ["https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+                        "https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+                        "https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+                        "https://d.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png"],
+                tileSize: 256,
+                attribution: "© OpenStreetMap contributors © CARTO"
+            },
+            risk: { type: "vector", url: PMTILES, attribution: "Defensive Pedal risk model" }
+        },
+        layers: [
+            { id: "basemap", type: "raster", source: "basemap" },
+            {
+                id: "risk", type: "line", source: "risk", "source-layer": "roads",
+                layout: { "line-cap": "round", "line-join": "round" },
+                paint: {
+                    "line-color": RISK_COLOR,
+                    "line-opacity": 0.85,
+                    "line-width": ["interpolate", ["linear"], ["zoom"],
+                        6,  ["case", [">=", ["get","risk"], 80], 0.8, 0.4],
+                        11, ["case", [">=", ["get","risk"], 80], 1.8, 1.0],
+                        14, ["case", [">=", ["get","risk"], 80], 3.6, 2.0],
+                        17, 5.5]
+                }
+            }
+        ]
+    }
+});
+
+map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "bottom-right");
+map.addControl(new maplibregl.GeolocateControl({
+    positionOptions: { enableHighAccuracy: true },
+    trackUserLocation: true, showUserLocation: true
+}), "bottom-right");
+map.addControl(new maplibregl.ScaleControl({ maxWidth: 120 }), "top-right");
+
+map.on("load", () => {
+    const ld = document.getElementById("loading");
+    ld.style.opacity = "0"; setTimeout(() => ld.remove(), 400);
+});
+
+map.on("click", "risk", (e) => {
+    const p = e.features[0].properties;
+    const r = p.risk;
+    const inc = p.inc ? `<div class="pop-inc">▲ increases: ${p.inc}</div>` : "";
+    const dec = p.dec ? `<div class="pop-dec">▼ decreases: ${p.dec}</div>` : "";
+    new maplibregl.Popup({ closeButton: true })
+        .setLngLat(e.lngLat)
+        .setHTML(`
+            <div class="pop-title">${p.name || "Unnamed road"}</div>
+            <div><span class="pop-risk" style="color:${col(r)}">${(+r).toFixed(0)}</span>
+                 <span style="font-size:12px;color:#666;"> ${cat(r)}</span></div>
+            <div style="margin-top:6px;font-size:12px;">${inc}${dec}</div>
+            <div class="pop-meta">Type: ${p.highway || "?"}</div>`)
+        .addTo(map);
+});
+map.on("mouseenter", "risk", () => map.getCanvas().style.cursor = "pointer");
+map.on("mouseleave", "risk", () => map.getCanvas().style.cursor = "");
+
+map.on("error", (e) => console.error("map error:", e && e.error));
+</script>
+</body>
+</html>
